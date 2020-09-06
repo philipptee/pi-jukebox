@@ -65,8 +65,6 @@ class Phoniebox(object):
         # read cardAssignments from given card assignments file
         card_assignments_file = self.get_setting("phoniebox", "card_assignments_file")
         self.cardAssignments = self.read_cardAssignments()
-        print "Card Setting file: {}".format(card_assignments_file)
-        print "Card Settings content: {}".format(str(self.cardAssignments))
         if self.get_setting("phoniebox", "translate_legacy_cardassignments", "bool") == True:
             self.log("Translating legacy cardAssignment config from folder.conf files.", 3)
             legacy_cardAssignments = self.translate_legacy_cardAssignments()
@@ -159,21 +157,19 @@ class Phoniebox(object):
 
     def do_start_playlist(self,cardid):
         """ restart the same playlist, eventually resume """
-        self.save_resume_state()
+        if self.get_cardsetting(self.lastplayedID,"resume"):
+            self.resume(self.lastplayedID,"save")
         self.mpd_connect_timeout()
         self.set_mpd_playmode(cardid)
-        uri = self.get_cardsetting(cardid,"uri")
-        print("URI is {}".format(uri))
-        self.play_mpd(uri)
+        self.play_mpd(self.get_cardsetting(cardid,"uri"))
         if self.get_cardsetting(cardid,"resume"):
-            self.resume(cardid)
+            self.resume(cardid,"resume")
         self.lastplayedID = cardid
 
     def do_toggle(self):
         """ toggle play/pause """
         self.mpd_connect_timeout()
         status = self.client.status()
-        self.log("phoniebox: toggling player state", 3)
         if status['state'] == "play":
             self.client.pause()
         else:
@@ -189,67 +185,34 @@ class Phoniebox(object):
         status = self.client.status()
         # start playlist if in stop state or there is only one song in the playlist (virtually loop)
         if (status["state"] ==  "stop") or (status["playlistlength"] == "1"):
-            self.log("phoniebox: restarting playlist", 3)
             self.do_restart_playlist()
         else:
-            self.log("phoniebox: playing next track", 3)
             self.client.next()
-
-    def do_previous(self):
-        """ skip to previous track """
-        self.log("phoniebox: playing previous track", 3)
-        self.mpd_connect_timeout()
-        status = self.client.status()
-        print("status: {}".format(status))
-        current_pos = int(status["song"])
-        previous_pos = max(1, current_pos - 1)
-        self.client.play(previous_pos)
 
     def do_stop(self):
         """ do nothing (on second swipe with noaudioplay) """
         self.mpd_connect_timeout()
         self.client.stop()
 
-    def do_volume_up(self):
-        volume_step = self.get_setting("phoniebox","volume_step", fallback=10)
-        self.change_volume(volume_step)
-
-    def do_volume_down(self):
-        volume_step = self.get_setting("phoniebox","volume_step", fallback=10)
-        self.change_volume(volume_step * -1)
-
-    def change_volume(self, increment):
-        """ Change the volume """
-        self.mpd_connect_timeout()
-        mpd_status = self.client.status()
-        current_volume = int(mpd_status["volume"])
-        min_volume = self.get_setting("phoniebox","min_volume", fallback=0)
-        max_volume = self.get_setting("phoniebox","max_volume", fallback=100)
-        new_volume = min(max_volume, max(min_volume, current_volume + increment))
-        if new_volume != current_volume:
-            self.log("Setting volume to {}".format(new_volume), 3)
-            self.client.setvol(new_volume)
-
     def play_alsa(self,audiofile):
         """ pause mpd and play file on alsa player """
         self.mpd_connect_timeout()
-        self.client.stop()
+        self.client.pause()
         # TODO: use the standard audio device or set them via phoniebox.conf
-        # subprocess.call(["aplay -q -Dsysdefault:CARD=sndrpijustboomd " + audiofile], shell=True)
-        subprocess.call(["aplay -q " + audiofile], shell=True)
+        subprocess.call(["aplay -q -Dsysdefault:CARD=sndrpijustboomd " + audiofile], shell=True)
+        subprocess.call(["aplay -q -Dsysdefault " + audiofile], shell=True)
 
     def play_mpd(self,uri):
         """ play uri in mpd """
-        self.log("phoniebox: playing {}".format(uri),3)
+        self.log("phoniebox: playing {}".format(uri.encode('utf-8')),3)
         self.mpd_connect_timeout()
         self.client.clear()
-        uris = [u.strip() for u in uri.split("\n") if u.strip()]
-        for u in uris:
-            self.client.add(u)
+        self.client.add(uri)
         self.client.play()
 
+
     # TODO: is there a better way to check for "value not present" than to return -1?
-    def get_setting(self,section,key,opt_type="string", fallback=-1):
+    def get_setting(self,section,key,opt_type="string"):
         """ get a setting from configFile file or cardAssignmentsFile
             if not present, return -1
         """
@@ -260,13 +223,13 @@ class Phoniebox(object):
             parser = self.config
         
         try:
-            opt = parser.get(section,key,fallback=fallback)
+            opt = parser.get(section,key)
         except configparser.NoOptionError:
             print("No option {} in section {}".format(key,section))
-            return fallback
+            return -1
         except configparser.NoSectionError:
             print("No section {}".format(section))
-            return fallback
+            return -1
         if "bool" in opt_type.lower():
             return str2bool(opt)
         else:
@@ -284,16 +247,18 @@ class Phoniebox(object):
             max_volume
             initial_volume """
         mpd_status = self.client.status()
-        # the absolute max_volume is 100%
-        max_volume = self.get_setting("phoniebox","max_volume", fallback=100)
-        # to be able to compare
-        init_volume = self.get_setting("phoniebox","init_volume", fallback=0)
+        max_volume = self.get_setting("phoniebox","max_volume")
+        init_volume = self.get_setting("phoniebox","init_volume")
+        if max_volume == -1:
+            max_volume = 100 # the absolute max_volume is 100%
+        if init_volume == -1:
+            init_volume = 0 # to be able to compare
         if max_volume < init_volume:
-            self.log("init_volume cannot exceed max_volume.", 2)
+            self.log("init_volume cannot exceed max_volume.",2)
             init_volume = max_volume # do not exceed max_volume
-        self.log("Setting initial volume to {}.".format(init_volume), 2)
-        self.client.setvol(init_volume)
-
+        if mpd_status["volume"] > max_volume:
+            self.client.setvol(init_volume)
+            
     def set_mpd_playmode(self,cardid):
         """ set playmode in mpd according to card settings """
         playmode_defaults_map = {"repeat":0,"random":0,"single":0,"consume":0}
@@ -312,33 +277,29 @@ class Phoniebox(object):
             set_playmode_map[key](playmode_setting)
             self.log("setting mpd {} = {}".format(key,playmode_setting),5)
 
-    def resume(self,cardid):
+    def resume(self,cardid,action="resume"):
         """ seek to saved position if resume is activated """ 
         self.mpd_connect_timeout()
         mpd_status = self.client.status()
         print(mpd_status)
-        opt_resume = self.get_cardsetting(cardid,"resume")
-        if opt_resume == -1 or opt_resume == 1:
-            resume_elapsed = self.get_cardsetting(cardid,"resume_elapsed")
-            resume_song = self.get_cardsetting(cardid,"resume_song")
-            if resume_song == -1:
-                resume_song = 0
-            if resume_elapsed != -1 and resume_elapsed != 0:
-                self.log("{}: resume song {} at time {}s".format(cardid,
-                        resume_song, resume_elapsed),5)
-                self.client.seek(resume_song,resume_elapsed)
-                self.client.play()
-
-    def save_resume_state(self):
-        cardid = self.lastplayedID
-        if cardid and self.get_cardsetting(cardid,"resume"):
-            self.mpd_connect_timeout()
-            mpd_status = self.client.status()
+        if action in ["resume","restore"]:
+            opt_resume = self.get_cardsetting(cardid,"resume")
+            if opt_resume == -1 or opt_resume == 1:
+                resume_elapsed = self.get_cardsetting(cardid,"resume_elapsed")
+                resume_song = self.get_cardsetting(cardid,"resume_song")
+                if resume_song == -1:
+                    resume_song = 0
+                if resume_elapsed != -1 and resume_elapsed != 0:
+                    self.log("{}: resume song {} at time {}s".format(cardid,
+                            self.get_cardsetting(cardid,"resume_song"),
+                            self.get_cardsetting(cardid,"resume_elapsed")),5)
+                    self.client.seek(resume_song,resume_elapsed)
+        elif action in ["save","store"]:
             try:
                 self.log("{}: save state, song {} at time {}s".format(cardid,
                             mpd_status["song"],mpd_status["elapsed"]),5)
                 self.cardAssignments.set(cardid,"resume_elapsed",
-                                            str(int(float(mpd_status["elapsed"]))))
+                                            mpd_status["elapsed"])
                 self.cardAssignments.set(cardid,"resume_song",
                                             mpd_status["song"])
             except KeyError as e:

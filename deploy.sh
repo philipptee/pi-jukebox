@@ -1,0 +1,1 @@
+scp -r /Users/philipp/Documents/coding/pi-jukebox/scripts pi@192.168.1.54:/home/pi/RPi-Jukebox-RFID

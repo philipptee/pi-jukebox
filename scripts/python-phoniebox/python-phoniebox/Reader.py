@@ -50,8 +50,7 @@ class UsbReader(object):
 
 class Mfrc522Reader(object):
     def __init__(self):
-        self.device = pirc522.RFID(pin_rst=25,
-            pin_ce=0, pin_irq=24, pin_mode = GPIO.BCM)
+        self.device = pirc522.RFID()
 
     def readCard(self):
         # Scan for cards

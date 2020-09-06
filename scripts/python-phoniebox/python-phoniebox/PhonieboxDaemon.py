@@ -2,14 +2,10 @@
 # -*- coding: utf-8 -*-
 
 # import threading
-import RPi.GPIO as GPIO
 import sys, os.path
 import signal
-import traceback
 from Phoniebox import Phoniebox
-from GpioHandler import GpioHandler
 from time import sleep, time
-
 
 # get absolute path of this script
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -60,9 +56,11 @@ class PhonieboxDaemon(Phoniebox):
         # establish mpd connection
         self.mpd_init_connection()
         self.mpd_init_settings()
-        self.client.clear()
+        state = self.client.status()["state"]
 
         daemon.play_alsa(daemon.get_setting("phoniebox", 'startup_sound'))
+        if state == "play":
+            self.client.play()
 
         # launch watcher for config files, blocks the script
         # TODO: it would be better to watch the changes with a second process that
@@ -120,41 +118,36 @@ class PhonieboxDaemon(Phoniebox):
                     else:
                         self.log("Card with ID {} not mapped yet.".format(cardid), 1)
 
-            except Error as e:
+            except OSError as e:
                 print("Execution failed:", e)
-                traceback.print_exc(file=sys.stdout)
 
             # check if it is time for the next update of the cardAssignments and do it
             # Note: this is purely time-based and not clever at all. Find a
             # TODO: find a better way to check for changes in the files on disk to trigger the update
-            # if time()-last_write_card_assignments > store_card_assignments and store_card_assignments != False:
-            #     # store card assignments
-            #     if self.get_setting("phoniebox", "translate_legacy_cardassignments", "bool") == True:
-            #         legacy_cardAssignments = self.translate_legacy_cardAssignments(last_write_card_assignments)
-            #         self.update_cardAssignments(legacy_cardAssignments)
-            #     else:
-            #         self.update_cardAssignments(self.read_cardAssignments)
+            if time()-last_write_card_assignments > store_card_assignments and store_card_assignments != False:
+                # store card assignments
+                if self.get_setting("phoniebox", "translate_legacy_cardassignments", "bool") == True:
+                    legacy_cardAssignments = self.translate_legacy_cardAssignments(last_write_card_assignments)
+                    self.update_cardAssignments(legacy_cardAssignments)
+                else:
+                    self.update_cardAssignments(self.read_cardAssignments)
 
-            #     self.write_new_cardAssignments()
-            #     last_write_card_assignments = time()
+                self.write_new_cardAssignments()
+                last_write_card_assignments = time()
 
     def signal_handler(self, signal, frame):
         """ catches signal and triggers the graceful exit """
         print("Caught signal {}, exiting...".format(signal))
         self.exit_gracefully()
 
-    def shutdown(self):
+    def exit_gracefully(self):
+        """ stop mpd and write cardAssignments to disk if daemon is stopped """
         self.mpd_connect_timeout()
-        self.save_resume_state()
         self.client.stop()
         self.client.disconnect()
         # write config to update playstate
-        # self.write_new_cardAssignments()
+        self.write_new_cardAssignments()
 
-
-    def exit_gracefully(self):
-        """ stop mpd and write cardAssignments to disk if daemon is stopped """
-        self.shutdown()
         # exit script
         sys.exit(0)
 
@@ -169,7 +162,6 @@ if __name__ == "__main__":
             configFilePath = sys.argv[1]
 
         daemon = PhonieboxDaemon(configFilePath)
-        gpio = GpioHandler(daemon)
 
         # setup the signal listeners
         signal.signal(signal.SIGINT, daemon.exit_gracefully)
